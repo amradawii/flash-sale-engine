@@ -43,6 +43,12 @@ final readonly class FlashSaleKeys
         return $this->key('expirations');
     }
 
+    /** user_id => units already confirmed (enforces max_per_user across purchases). */
+    public function purchased(): string
+    {
+        return $this->key('purchased');
+    }
+
     /** Stream of confirmed orders waiting to be persisted to MySQL. */
     public function orders(): string
     {
@@ -57,6 +63,7 @@ final readonly class FlashSaleKeys
             $this->holds(),
             $this->reservations(),
             $this->expirations(),
+            $this->purchased(),
             $this->orders(),
         ];
     }

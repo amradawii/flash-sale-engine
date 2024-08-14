@@ -5,6 +5,9 @@ x-php: &php
   image: flash-sale-engine/php:dev
   volumes:
     - ./:/var/www/html
+    # vendor lives inside Linux: reading it through a Windows/macOS bind mount
+    # adds seconds to every request.
+    - vendor:/var/www/html/vendor
   restart: unless-stopped
 
 services:
@@ -88,6 +91,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  vendor:
   mysql_data:
   redis_data:
   node_modules:

@@ -3,9 +3,9 @@
 namespace App\Console\Commands;
 
 use App\Models\FlashSale;
-use App\Support\Redis\FlashSaleKeys;
+use App\Services\FlashSale\InventoryLockService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Redis;
+use RuntimeException;
 
 class WarmupFlashSaleCommand extends Command
 {
@@ -16,7 +16,7 @@ class WarmupFlashSaleCommand extends Command
 
     protected $description = 'Load flash sale inventory from MySQL into Redis before the sale opens';
 
-    public function handle(): int
+    public function handle(InventoryLockService $inventory): int
     {
         $sales = $this->option('all')
             ? FlashSale::query()->where('ends_at', '>', now())->get()
@@ -32,25 +32,14 @@ class WarmupFlashSaleCommand extends Command
         $skipped = 0;
 
         foreach ($sales as $sale) {
-            $keys = FlashSaleKeys::for($sale->id);
-            $activeHolds = (int) Redis::hlen($keys->holds());
-
-            if ($activeHolds > 0 && ! $this->option('force')) {
-                $this->components->warn(
-                    "Sale #{$sale->id} has {$activeHolds} active reservation(s); skipped. Use --force to reset it."
-                );
+            try {
+                $inventory->load($sale, (bool) $this->option('force'));
+            } catch (RuntimeException $e) {
+                $this->components->warn($e->getMessage().' Skipped; use --force to reset it.');
                 $skipped++;
 
                 continue;
             }
-
-            // The orders stream is never cleared: it may hold confirmed orders
-            // that the consumer has not persisted yet.
-            Redis::transaction(function ($redis) use ($keys, $sale) {
-                $redis->del($keys->stock(), $keys->holds(), $keys->reservations(), $keys->expirations());
-                $redis->set($keys->stock(), $sale->stock_remaining);
-                $redis->sadd(FlashSaleKeys::ACTIVE_SALES, $sale->id);
-            });
 
             $rows[] = [
                 $sale->id,
