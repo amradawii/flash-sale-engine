@@ -52,6 +52,14 @@ services:
       app:
         condition: service_healthy
 
+  consumer:
+    <<: *php
+    command: ["php", "artisan", "flash-sale:consume-orders"]
+    stop_signal: SIGTERM
+    depends_on:
+      app:
+        condition: service_healthy
+
   node:
     image: node:20.16.0-alpine
     working_dir: /app

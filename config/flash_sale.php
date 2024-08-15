@@ -26,4 +26,46 @@ return [
 
     'reclaim_batch' => (int) env('FLASH_SALE_RECLAIM_BATCH', 500),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Idempotency
+    |--------------------------------------------------------------------------
+    |
+    | How long a finished response is kept for replay, and how long a request
+    | may stay "in progress" before its key is released for a retry.
+    |
+    */
+
+    'idempotency' => [
+        'ttl' => (int) env('FLASH_SALE_IDEMPOTENCY_TTL', 86_400),
+        'lock_ttl' => (int) env('FLASH_SALE_IDEMPOTENCY_LOCK_TTL', 60),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Order Consumer
+    |--------------------------------------------------------------------------
+    |
+    | Redis Stream consumer group that persists confirmed orders to MySQL.
+    |
+    */
+
+    'consumer' => [
+        'group' => env('FLASH_SALE_CONSUMER_GROUP', 'order-persisters'),
+        'batch' => (int) env('FLASH_SALE_CONSUMER_BATCH', 100),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Strategy Lab
+    |--------------------------------------------------------------------------
+    |
+    | Simulated per-purchase work (payment authorisation, fraud check...).
+    | Every strategy does the same work; what differs is whether the
+    | inventory lock is held while it happens.
+    |
+    */
+
+    'lab_processing_ms' => (int) env('FLASH_SALE_LAB_PROCESSING_MS', 50),
+
 ];
