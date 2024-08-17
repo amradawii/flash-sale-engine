@@ -68,4 +68,31 @@ return [
 
     'lab_processing_ms' => (int) env('FLASH_SALE_LAB_PROCESSING_MS', 50),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Broadcasting
+    |--------------------------------------------------------------------------
+    |
+    | Minimum gap between high-frequency WebSocket updates for one sale.
+    |
+    */
+
+    'broadcast_throttle_ms' => (int) env('FLASH_SALE_BROADCAST_THROTTLE_MS', 200),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Simulator
+    |--------------------------------------------------------------------------
+    |
+    | The simulator fires real concurrent HTTP requests at the web server, so
+    | it needs the URL nginx is reachable on from inside the app container.
+    | Disable it outside of demos: its endpoints reset sales.
+    |
+    */
+
+    'simulation' => [
+        'enabled' => (bool) env('FLASH_SALE_SIMULATOR', true),
+        'base_url' => env('FLASH_SALE_SIMULATION_URL', 'http://nginx'),
+    ],
+
 ];

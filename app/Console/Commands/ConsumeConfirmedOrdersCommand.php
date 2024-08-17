@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\InventoryEventType;
+use App\Services\FlashSale\InventoryBroadcaster;
 use App\Services\FlashSale\InventoryLockService;
 use App\Services\FlashSale\OrderPersister;
 use App\Support\Redis\FlashSaleKeys;
@@ -23,7 +25,7 @@ class ConsumeConfirmedOrdersCommand extends Command
     /** @var array<string, true> */
     private array $groups = [];
 
-    public function handle(InventoryLockService $inventory, OrderPersister $persister): int
+    public function handle(InventoryLockService $inventory, OrderPersister $persister, InventoryBroadcaster $broadcaster): int
     {
         $this->trap([SIGTERM, SIGINT], fn () => $this->running = false);
 
@@ -36,6 +38,12 @@ class ConsumeConfirmedOrdersCommand extends Command
         $this->components->info("Consuming confirmed orders as [{$group}/{$consumer}].");
 
         while ($this->running) {
+            if ($this->paused()) {
+                usleep(500_000);
+
+                continue;
+            }
+
             $streams = $this->streams($inventory, $client, $group);
 
             if ($streams === []) {
@@ -78,6 +86,12 @@ class ConsumeConfirmedOrdersCommand extends Command
                 continue;
             }
 
+            // Paused while blocked: leave the entries pending, exactly as a
+            // crashed worker would; the "0" read picks them up on resume.
+            if ($this->paused()) {
+                continue;
+            }
+
             foreach ($batch as $stream => $entries) {
                 $stream = str_starts_with($stream, $prefix) ? substr($stream, strlen($prefix)) : $stream;
 
@@ -98,8 +112,19 @@ class ConsumeConfirmedOrdersCommand extends Command
                     $this->line(sprintf(
                         '  %s sale #%s user #%s ×%s %s',
                         $id, $fields['sale_id'], $fields['user_id'], $fields['quantity'],
-                        $created ? '<info>persisted</info>' : '<comment>duplicate, skipped</comment>',
+                        $created ? '<info>persisted</info>' : '<comment>skipped (duplicate or deleted sale)</comment>',
                     ));
+
+                    if ($created) {
+                        $saleId = (int) $fields['sale_id'];
+                        $broadcaster->publish(
+                            $saleId,
+                            InventoryEventType::Persisted,
+                            fn () => $inventory->snapshot($saleId),
+                            sprintf('Order of %s saved to MySQL.', InventoryLockService::shopperName((int) $fields['user_id'])),
+                            (int) $fields['user_id'],
+                        );
+                    }
                 }
             }
         }
@@ -127,6 +152,11 @@ class ConsumeConfirmedOrdersCommand extends Command
         }
 
         return $streams;
+    }
+
+    private function paused(): bool
+    {
+        return (bool) Redis::exists(FlashSaleKeys::CONSUMER_PAUSED);
     }
 
     private function hasEntries(mixed $batch): bool

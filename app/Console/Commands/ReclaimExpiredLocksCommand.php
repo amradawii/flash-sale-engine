@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Services\FlashSale\InventoryBroadcaster;
 use App\Services\FlashSale\InventoryLockService;
 use Illuminate\Console\Command;
 
@@ -11,7 +12,7 @@ class ReclaimExpiredLocksCommand extends Command
 
     protected $description = 'Return the stock of expired reservations to every active flash sale';
 
-    public function handle(InventoryLockService $inventory): int
+    public function handle(InventoryLockService $inventory, InventoryBroadcaster $broadcaster): int
     {
         $limit = $this->option('limit') !== null ? (int) $this->option('limit') : null;
 
@@ -24,6 +25,9 @@ class ReclaimExpiredLocksCommand extends Command
                     $saleId, $result->unitsReclaimed, $result->expiredReservations, $result->availableStock,
                 ));
             }
+
+            // Throttled broadcasts may have skipped the last change of a burst.
+            $broadcaster->sync($saleId, $inventory->snapshot($saleId));
         }
 
         return self::SUCCESS;

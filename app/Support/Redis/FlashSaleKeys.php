@@ -12,6 +12,9 @@ final readonly class FlashSaleKeys
 {
     public const ACTIVE_SALES = 'flash_sale:active';
 
+    /** Demo switch used by the simulator to hold the order consumer. */
+    public const CONSUMER_PAUSED = 'flash_sale:consumer:paused';
+
     public function __construct(public int $saleId) {}
 
     public static function for(int $saleId): self
@@ -55,6 +58,18 @@ final readonly class FlashSaleKeys
         return $this->key('orders');
     }
 
+    /** Short-lived flag limiting broadcasts per sale during bursts. */
+    public function broadcastThrottle(): string
+    {
+        return $this->key('broadcast_throttle');
+    }
+
+    /** Last state pushed to WebSocket clients. */
+    public function broadcastState(): string
+    {
+        return $this->key('broadcast_state');
+    }
+
     /** @return list<string> */
     public function all(): array
     {
@@ -65,6 +80,8 @@ final readonly class FlashSaleKeys
             $this->expirations(),
             $this->purchased(),
             $this->orders(),
+            $this->broadcastThrottle(),
+            $this->broadcastState(),
         ];
     }
 

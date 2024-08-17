@@ -4,6 +4,7 @@ namespace App\Services\FlashSale;
 
 use App\DTOs\ReclaimResultData;
 use App\DTOs\ReservationResultData;
+use App\Enums\InventoryEventType;
 use App\Enums\ReservationStatus;
 use App\Models\FlashSale;
 use App\Models\FlashSaleOrder;
@@ -15,7 +16,10 @@ use RuntimeException;
 
 class InventoryLockService
 {
-    public function __construct(private readonly LuaScriptRunner $lua) {}
+    public function __construct(
+        private readonly LuaScriptRunner $lua,
+        private readonly InventoryBroadcaster $broadcaster,
+    ) {}
 
     /**
      * Copy a sale's inventory from MySQL into Redis.
@@ -58,6 +62,8 @@ class InventoryLockService
 
             $redis->sadd(FlashSaleKeys::ACTIVE_SALES, $sale->id);
         });
+
+        $this->broadcaster->publish($sale->id, InventoryEventType::Sync, fn () => $this->snapshot($sale->id), 'Sale inventory loaded.');
     }
 
     /** Remove every Redis key of a sale, including unprocessed orders. */
@@ -77,13 +83,25 @@ class InventoryLockService
             $userId, $quantity, $sale->reservation_ttl_seconds, (string) Str::uuid(), $sale->max_per_user,
         ]);
 
-        return match ((int) $result[0]) {
+        $data = match ((int) $result[0]) {
             1 => new ReservationResultData(ReservationStatus::Reserved, (int) $result[1], $result[2], (int) $result[3], $quantity),
             -1 => new ReservationResultData(ReservationStatus::AlreadyHolding, (int) $result[1], $result[2], (int) $result[3]),
             0 => new ReservationResultData(ReservationStatus::SoldOut, (int) $result[1]),
             -3 => new ReservationResultData(ReservationStatus::LimitReached, (int) $result[1]),
             -4 => new ReservationResultData(ReservationStatus::SaleNotLoaded, 0),
         };
+
+        if ($data->succeeded()) {
+            $this->broadcaster->publish(
+                $sale->id,
+                $data->availableStock === 0 ? InventoryEventType::SoldOut : InventoryEventType::Reserved,
+                fn () => $this->snapshot($sale->id),
+                sprintf('%s reserved %d unit(s).', self::shopperName($userId), $quantity),
+                $userId,
+            );
+        }
+
+        return $data;
     }
 
     public function confirm(FlashSale $sale, int $userId, string $token): ReservationResultData
@@ -94,13 +112,25 @@ class InventoryLockService
             $keys->stock(), $keys->holds(), $keys->reservations(), $keys->expirations(), $keys->purchased(), $keys->orders(),
         ], [$userId, $token, $sale->id]);
 
-        return match ((int) $result[0]) {
+        $data = match ((int) $result[0]) {
             1 => new ReservationResultData(
                 ReservationStatus::Confirmed, (int) $result[3], $token, quantity: (int) $result[1], orderStreamId: $result[2],
             ),
             -2 => new ReservationResultData(ReservationStatus::NotFound, (int) $result[1], $token),
             -5 => new ReservationResultData(ReservationStatus::Expired, (int) $result[1], $token),
         };
+
+        if ($data->succeeded()) {
+            $this->broadcaster->publish(
+                $sale->id,
+                InventoryEventType::Confirmed,
+                fn () => $this->snapshot($sale->id),
+                sprintf('%s paid; order queued in the outbox stream.', self::shopperName($userId)),
+                $userId,
+            );
+        }
+
+        return $data;
     }
 
     public function release(FlashSale $sale, int $userId, string $token): ReservationResultData
@@ -111,10 +141,22 @@ class InventoryLockService
             $keys->stock(), $keys->holds(), $keys->reservations(), $keys->expirations(),
         ], [$userId, $token]);
 
-        return match ((int) $result[0]) {
+        $data = match ((int) $result[0]) {
             1 => new ReservationResultData(ReservationStatus::Released, (int) $result[2], $token, quantity: (int) $result[1]),
             -2 => new ReservationResultData(ReservationStatus::NotFound, (int) $result[1], $token),
         };
+
+        if ($data->succeeded()) {
+            $this->broadcaster->publish(
+                $sale->id,
+                InventoryEventType::Released,
+                fn () => $this->snapshot($sale->id),
+                sprintf('%s cancelled; %d unit(s) back in stock.', self::shopperName($userId), $data->quantity),
+                $userId,
+            );
+        }
+
+        return $data;
     }
 
     public function reclaim(int $saleId, ?int $limit = null): ReclaimResultData
@@ -125,7 +167,23 @@ class InventoryLockService
             $keys->stock(), $keys->holds(), $keys->reservations(), $keys->expirations(),
         ], [$limit ?? config('flash_sale.reclaim_batch')]);
 
-        return new ReclaimResultData($saleId, (int) $result[0], (int) $result[1], (int) $result[2], (int) $result[3]);
+        $data = new ReclaimResultData($saleId, (int) $result[0], (int) $result[1], (int) $result[2], (int) $result[3]);
+
+        if ($data->unitsReclaimed > 0) {
+            $this->broadcaster->publish(
+                $saleId,
+                InventoryEventType::Expired,
+                fn () => $this->snapshot($saleId),
+                sprintf('%d reservation(s) expired; %d unit(s) returned to stock.', $data->expiredReservations, $data->unitsReclaimed),
+            );
+        }
+
+        return $data;
+    }
+
+    public static function shopperName(int $userId): string
+    {
+        return sprintf('Shopper %03d', $userId);
     }
 
     /** @return list<int> */

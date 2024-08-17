@@ -11,8 +11,6 @@ use Illuminate\Support\Facades\DB;
 
 class OrderPersister
 {
-    public function __construct(private readonly FlashSaleRepository $sales) {}
-
     /**
      * Persist one confirmed order from the outbox stream.
      *
@@ -20,11 +18,16 @@ class OrderPersister
      * token turns a redelivery into a no-op.
      *
      * @param  array{sale_id: string, user_id: string, token: string, quantity: string, confirmed_at: string}  $entry
-     * @return bool false when the order was already persisted
+     * @return bool false when the order was already persisted or its sale no longer exists
      */
     public function persist(array $entry): bool
     {
-        $sale = $this->sales->find((int) $entry['sale_id']);
+        $sale = FlashSale::query()->find((int) $entry['sale_id']);
+
+        if ($sale === null) {
+            return false;
+        }
+
         $quantity = (int) $entry['quantity'];
 
         try {
